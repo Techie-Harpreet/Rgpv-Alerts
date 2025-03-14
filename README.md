@@ -16,7 +16,7 @@ RGPV Timetable Alert Bot is a **Telegram bot** that automatically checks for new
 ### 1⃣ Clone the Repository
 ```bash
 git clone https://github.com/Techie-Harpreet/Rgpv-Alerts.git
-cd Rgpv-Alerts
+cd Rgpv-Alerts-main
 ```
 
 ### 2⃣ Create a Virtual Environment (Optional but Recommended)
