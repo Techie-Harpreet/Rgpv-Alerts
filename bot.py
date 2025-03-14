@@ -13,8 +13,8 @@ from urllib.parse import quote
 load_dotenv()
 
 # Configuration
-BOT_TOKEN = ""
-GROUP_ID = ""
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+GROUP_ID = os.getenv("GROUP_ID")
 API_URL = "https://api.rgpvnotes.in/timetable"
 SENT_TIMETABLES_FILE = "sent_timetables.json"
 
@@ -86,8 +86,6 @@ async def check_for_new_timetables(context: CallbackContext):
         page_content = driver.get_page_source()
         
         # Find JSON content in the page
-        # This assumes the API returns JSON directly or embedded in the page
-        # You might need to adjust this based on the actual response format
         try:
             # Try to parse the entire page as JSON first
             data = json.loads(page_content)
@@ -182,25 +180,20 @@ def main():
     """Run the bot without conflicting event loops"""
     logger.info("Bot is starting...")
 
-    # Initialize manager
     manager = TimetableManager()
     
     # Initialize the Application
     application = Application.builder().token(BOT_TOKEN).build()
     
-    # Store the manager in application to make it accessible in context
     application.manager = manager
     
-    # Add command handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("status", status))
     application.add_handler(CommandHandler("check", manual_check))
     application.add_handler(CommandHandler("reset", reset_data))
     
-    # Schedule periodic checks using the application's job queue
     application.job_queue.run_repeating(check_for_new_timetables, interval=55*60)  # 15 minutes
     
-    # Run initial check when the bot starts
     application.job_queue.run_once(check_for_new_timetables, 0)
     
     # Start the Bot
