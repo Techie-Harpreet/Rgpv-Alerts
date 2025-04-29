@@ -71,7 +71,7 @@ python bot.py --headless
 
 ## 🖼 Screenshots
 
-![Timetable Alert](https://raw.githubusercontent.com/Techie-Harpreet/Rgpv-Alerts/refs/heads/main/Images/Screenshot%202025-03-14%20145848.png?token=GHSAT0AAAAAAC7V2MOFI72UYPJRGDBLZWPYZ6T66CQ)
+![Timetable Alert]([https://raw.githubusercontent.com/Techie-Harpreet/Rgpv-Alerts/refs/heads/main/Images/Screenshot%202025-03-14%20145848.png?token=GHSAT0AAAAAAC7V2MOFI72UYPJRGDBLZWPYZ6T66CQ](https://raw.githubusercontent.com/Techie-Harpreet/Rgpv-Alerts/refs/heads/main/Images/Screenshot%202025-03-14%20145848.png))
 
 ---
 
