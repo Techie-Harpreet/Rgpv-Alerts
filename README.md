@@ -79,7 +79,7 @@ python bot.py --headless
 Join the Telegram channel for live alerts:
 [![Telegram](https://img.shields.io/badge/Telegram-Join%20Channel-blue)](https://t.me/rgpv_alerts)
 
-**Channel Link:** [https://t.me/rgpv_alerts](https://t.me/rgpv_alerts)
+**Channel Link:** [https://t.me/rgpv_alerts](https://t.me/rgpvupdates)
 
 ---
 
