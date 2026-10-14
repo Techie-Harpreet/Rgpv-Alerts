@@ -1,0 +1,10 @@
+.env
+.git
+venv/
+__pycache__/
+data/
+*.log
+*.log.*
+*.tmp
+rgpv_timetables.json
+rgpv_timetables_test.json
