@@ -1,0 +1,187 @@
+"""
+Scrape RGPV every CHECK_INTERVAL seconds and send new timetables to a WhatsApp
+channel through the WAHA API (https://waha.devlike.pro).
+
+One message per program. Timetables are marked sent only when WAHA answers 2xx,
+so failed deliveries are retried on the next check.
+
+Usage:
+    python whatsapp_sender.py          # run forever
+    python whatsapp_sender.py --once   # single check, then exit
+"""
+
+import argparse
+import json
+import logging
+import os
+import sys
+import time
+from logging.handlers import RotatingFileHandler
+
+import requests
+
+from helper import DATA_DIR, SENT_TIMETABLES_FILE, TIMETABLES_FILE, convert_aspx_to_pdf_url, write_json_atomic
+from scraper import RGPVScraper
+
+
+WAHA_URL = os.getenv("WAHA_URL", "").rstrip("/")
+WAHA_API_KEY = os.getenv("WAHA_API_KEY")
+WAHA_SESSION = os.getenv("WAHA_SESSION")  # optional; default: every WORKING session
+WHATSAPP_CHAT_ID = os.getenv("WHATSAPP_CHAT_ID")  # optional; default: every channel you are ADMIN of
+CHECK_INTERVAL = int(os.getenv("CHECK_INTERVAL", "7200"))  # seconds
+SEND_DELAY = 5  # seconds between messages
+
+logger = logging.getLogger("whatsapp_sender")
+
+
+def load_sent_ids():
+    if os.path.exists(SENT_TIMETABLES_FILE):
+        try:
+            with open(SENT_TIMETABLES_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except json.JSONDecodeError:
+            logger.error("Failed to decode sent timetables file. Starting fresh.")
+    return []
+
+
+def find_new_timetables(data, sent_ids):
+    """Return {program_name: [(timetable, unique_id), ...]} for timetables not yet sent."""
+    sent = set(sent_ids)
+    new = {}
+    for program in data:
+        program_name = program.get("programName", "N/A")
+        for timetable in program.get("programDataList", []):
+            unique_id = (
+                f"{program_name}_{timetable.get('semester', '')}_"
+                f"{timetable.get('title', '')}_{timetable.get('url', '')}"
+            )
+            if unique_id not in sent:
+                new.setdefault(program_name, []).append((timetable, unique_id))
+    return new
+
+
+def whatsapp_message(program_name, timetables):
+    """WhatsApp text: *bold*, plain links."""
+    lines = [f"📢 *New Time Table Update – {program_name}*", ""]
+    for index, t in enumerate(timetables, 1):
+        lines.append(f"{index}. 📖 *{t['title']}*")
+        if t["semester"]:
+            lines.append(f"   📆 {t['semester']}")
+        lines += [f"   🔗 {t['url']}", ""]
+    return "\n".join(lines).strip()
+
+
+def waha(method, path, **kwargs):
+    headers = {"X-Api-Key": WAHA_API_KEY} if WAHA_API_KEY else {}
+    r = requests.request(method, f"{WAHA_URL}{path}", headers=headers, timeout=30, **kwargs)
+    if not r.ok:
+        # 422 usually means the session is not WORKING (re-scan the QR / restart the session)
+        raise requests.HTTPError(f"{r.status_code} {method} {path}: {r.text[:300]}", response=r)
+    return r.json() if r.content else None
+
+
+def get_targets():
+    """[(session, chat_id), ...]: WORKING sessions -> channels where we are ADMIN."""
+    if WAHA_SESSION:
+        sessions = [WAHA_SESSION]
+    else:
+        sessions = [s["name"] for s in waha("GET", "/api/sessions") if s.get("status") == "WORKING"]
+    if not sessions:
+        return []
+    if WHATSAPP_CHAT_ID:
+        return [(sessions[0], WHATSAPP_CHAT_ID)]
+
+    targets = {}  # chat_id -> session, so a channel shared by two sessions gets one message
+    for session in sessions:
+        for channel in waha("GET", f"/api/{session}/channels", params={"role": "ADMIN"}):
+            targets.setdefault(channel["id"], session)
+    return [(session, chat_id) for chat_id, session in targets.items()]
+
+
+def send_whatsapp(session, chat_id, text):
+    try:
+        waha("POST", "/api/sendText", json={"session": session, "chatId": chat_id, "text": text})
+        return True
+    except requests.RequestException as e:
+        logger.error(f"Failed to send to {chat_id}: {e}")
+        return False
+
+
+def run_check():
+    logger.info("Scraping RGPV...")
+    try:
+        data = RGPVScraper().scrape()
+    except Exception as e:
+        logger.error(f"Scraping failed: {e}")
+        return
+    if not data:
+        logger.warning("Scraper returned no programs")
+        return
+    write_json_atomic(TIMETABLES_FILE, data)
+
+    sent_ids = load_sent_ids()
+    new = find_new_timetables(data, sent_ids)
+    if not new:
+        logger.info("No new timetables found.")
+        return
+    logger.info(f"New timetables found: {sum(len(v) for v in new.values())}")
+
+    try:
+        targets = get_targets()
+    except requests.RequestException as e:
+        logger.error(f"Could not get WAHA sessions/channels: {e}")
+        return
+    if not targets:
+        logger.error("No WORKING WAHA session or ADMIN channel found; nothing sent")
+        return
+    logger.info(f"Sending to: {', '.join(chat_id for _, chat_id in targets)}")
+
+    for program_name, items in new.items():
+        timetables = [
+            {
+                "title": t.get("title", ""),
+                "semester": t.get("semester", ""),
+                "url": convert_aspx_to_pdf_url(t.get("url", "")),
+            }
+            for t, _ in items
+        ]
+        text = whatsapp_message(program_name, timetables)
+        if all([send_whatsapp(session, chat_id, text) for session, chat_id in targets]):
+            sent_ids.extend(uid for _, uid in items)
+            write_json_atomic(SENT_TIMETABLES_FILE, sent_ids)
+            logger.info(f"Sent {len(items)} timetables for {program_name}")
+        else:
+            logger.error(f"Not marking {program_name} timetables as sent; will retry next check")
+        time.sleep(SEND_DELAY)
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Send new RGPV timetables to a WhatsApp channel via WAHA")
+    parser.add_argument("--once", action="store_true", help="Run a single check and exit")
+    args = parser.parse_args()
+
+    logging.Formatter.converter = time.localtime
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(message)s",
+        handlers=[
+            RotatingFileHandler(os.path.join(DATA_DIR, "whatsapp_sender.log"), maxBytes=5_000_000, backupCount=3, encoding="utf-8"),
+            logging.StreamHandler(),
+        ],
+    )
+
+    if not WAHA_URL:
+        sys.exit("Set WAHA_URL in .env (see .env.example)")
+
+    if args.once:
+        run_check()
+        return
+
+    logger.info(f"Starting; checking every {CHECK_INTERVAL}s")
+    while True:
+        run_check()
+        time.sleep(CHECK_INTERVAL)
+
+
+if __name__ == "__main__":
+    main()
