@@ -1,5 +1,4 @@
 import asyncio
-import json
 import logging
 import os
 import sys
@@ -9,7 +8,10 @@ from logging.handlers import RotatingFileHandler
 from telegram import Update
 from telegram.ext import Application, CallbackContext, CommandHandler, ContextTypes
 
-from helper import DATA_DIR, SENT_TIMETABLES_FILE, TIMETABLES_FILE, convert_aspx_to_pdf_url, get_time_tables_link, write_json_atomic
+from helper import (
+    DATA_DIR, SENT_TIMETABLES, TIMETABLES, StorageError, convert_aspx_to_pdf_url, get_time_tables_link,
+    load_json, save_json,
+)
 
 
 # Configuration
@@ -42,19 +44,20 @@ class TimetableManager:
         self.sent_timetables = self.load_sent_timetables()
 
     def load_sent_timetables(self):
-        if os.path.exists(SENT_TIMETABLES_FILE):
-            try:
-                with open(SENT_TIMETABLES_FILE, "r", encoding="utf-8") as file:
-                    return json.load(file)
-            except json.JSONDecodeError:
-                logger.error("Failed to decode sent timetables file. Starting fresh.")
-        return []
+        """Sent list, or None if it can't be read (the check is skipped rather than re-sending everything)."""
+        try:
+            return load_json(SENT_TIMETABLES, [])
+        except StorageError as e:
+            logger.error(f"Cannot read sent timetables: {e}")
+            return None
 
     def save_sent_timetables(self):
         try:
-            write_json_atomic(SENT_TIMETABLES_FILE, self.sent_timetables)
-        except OSError as e:
+            save_json(SENT_TIMETABLES, self.sent_timetables)
+            return True
+        except StorageError as e:
             logger.error(f"Failed to save sent timetables: {e}")
+            return False
 
 
 async def send_message(bot, message, parse_mode="HTML", disable_web_page_preview=True):
@@ -74,25 +77,26 @@ async def send_message(bot, message, parse_mode="HTML", disable_web_page_preview
 
 
 async def check_for_new_timetables(context: CallbackContext):
-    """Check for new timetables from the local JSON file"""
-    logger.info("Checking for new timetables from file...")
+    """Check for new timetables in the stored scrape results"""
+    logger.info("Checking for new timetables...")
     manager = context.application.manager
-    # Reload data from file before each check
-    manager.sent_timetables = manager.load_sent_timetables()
-    sent_ids = set(manager.sent_timetables)
-
-    if not os.path.exists(TIMETABLES_FILE):
-        logger.error(f"File not found: {TIMETABLES_FILE}")
+    # Reload before each check
+    sent = manager.load_sent_timetables()
+    if sent is None:
         return
+    manager.sent_timetables = sent
+    sent_ids = set(sent)
 
     try:
-        with open(TIMETABLES_FILE, "r", encoding="utf-8") as file:
-            data = json.load(file)
-    except json.JSONDecodeError:
-        logger.error("Failed to parse JSON from file")
+        data = load_json(TIMETABLES, None)
+    except StorageError as e:
+        logger.error(f"Cannot read timetables: {e}")
+        return
+    if not data:
+        logger.error("No scraped timetables available")
         return
 
-    logger.info(f"Found {len(data)} programs in the file")
+    logger.info(f"Found {len(data)} programs")
 
     # Identify new timetables, grouped by program
     program_grouped = {}
@@ -144,7 +148,8 @@ async def check_for_new_timetables(context: CallbackContext):
         for lines, ids in chunks:
             if await send_message(context.bot, "\n".join(lines)):
                 manager.sent_timetables.extend(ids)
-                manager.save_sent_timetables()
+                if not manager.save_sent_timetables():
+                    return
                 logger.info(f"Successfully sent and saved {len(ids)} timetables for {program_name}")
             else:
                 logger.error(f"Not marking {len(ids)} {program_name} timetables as sent; will retry next check")

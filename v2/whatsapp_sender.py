@@ -11,7 +11,6 @@ Usage:
 """
 
 import argparse
-import json
 import logging
 import os
 import sys
@@ -22,7 +21,8 @@ from logging.handlers import RotatingFileHandler
 import requests
 
 from helper import (
-    DATA_DIR, SENT_NOTICES_FILE, SENT_TIMETABLES_FILE, TIMETABLES_FILE, convert_aspx_to_pdf_url, write_json_atomic,
+    DATA_DIR, SENT_NOTICES, SENT_TIMETABLES, TIMETABLES, StorageError, convert_aspx_to_pdf_url,
+    load_json, save_json, storage_location,
 )
 from notices import NOTICE_PAGE, NoticeScraper, notice_id
 from scraper import RGPVScraper
@@ -40,14 +40,23 @@ SEND_DELAY = 5  # seconds between messages
 logger = logging.getLogger("whatsapp_sender")
 
 
-def load_sent_ids(path):
-    if os.path.exists(path):
-        try:
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except json.JSONDecodeError:
-            logger.error(f"Failed to decode {os.path.basename(path)}. Starting fresh.")
-    return []
+def load_sent_ids(name):
+    """Sent list, or None if it can't be read (the check is skipped rather than re-sending everything)."""
+    try:
+        return load_json(name, [])
+    except StorageError as e:
+        logger.error(f"Skipping check, cannot read {name}: {e}")
+        return None
+
+
+def mark_sent(name, sent_ids):
+    """Persist the sent list; False if that failed (stop sending to avoid duplicates)."""
+    try:
+        save_json(name, sent_ids)
+        return True
+    except StorageError as e:
+        logger.error(f"Stopping, cannot save {name}: {e}")
+        return False
 
 
 def find_new_timetables(data, sent_ids):
@@ -149,9 +158,14 @@ def check_timetables():
     if not data:
         logger.warning("Scraper returned no programs")
         return
-    write_json_atomic(TIMETABLES_FILE, data)
+    try:
+        save_json(TIMETABLES, data)
+    except StorageError as e:
+        logger.warning(f"Could not save timetables cache: {e}")
 
-    sent_ids = load_sent_ids(SENT_TIMETABLES_FILE)
+    sent_ids = load_sent_ids(SENT_TIMETABLES)
+    if sent_ids is None:
+        return
     new = find_new_timetables(data, sent_ids)
     if not new:
         logger.info("No new timetables found.")
@@ -173,7 +187,8 @@ def check_timetables():
         ]
         if send_to_all(targets, whatsapp_message(program_name, timetables)):
             sent_ids.extend(uid for _, uid in items)
-            write_json_atomic(SENT_TIMETABLES_FILE, sent_ids)
+            if not mark_sent(SENT_TIMETABLES, sent_ids):
+                return
             logger.info(f"Sent {len(items)} timetables for {program_name}")
         else:
             logger.error(f"Not marking {program_name} timetables as sent; will retry next check")
@@ -190,7 +205,9 @@ def check_notices():
         logger.error(f"Notice scraping failed: {e}")
         return
 
-    sent_ids = load_sent_ids(SENT_NOTICES_FILE)
+    sent_ids = load_sent_ids(SENT_NOTICES)
+    if sent_ids is None:
+        return
     sent = set(sent_ids)
     new, seen = [], set()
     for n in reversed(notices):  # oldest first, so the channel reads in order
@@ -219,7 +236,8 @@ def check_notices():
 
         if send_to_all(targets, notices_message(batch)):
             sent_ids.extend(notice_id(n) for n in batch)
-            write_json_atomic(SENT_NOTICES_FILE, sent_ids)
+            if not mark_sent(SENT_NOTICES, sent_ids):
+                return
             logger.info(f"Sent {len(batch)} notices")
         else:
             logger.error(f"Not marking {len(batch)} notices as sent; will retry next check")
@@ -249,6 +267,7 @@ def main():
     if not WAHA_URL:
         sys.exit("Set WAHA_URL in .env (see .env.example)")
 
+    logger.info(f"State is kept in {storage_location()}")
     if args.once:
         run_check()
         return

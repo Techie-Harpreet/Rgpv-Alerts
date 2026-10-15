@@ -9,6 +9,5 @@ COPY requirements.txt .
 RUN pip install -r requirements.txt
 
 COPY . .
-VOLUME /app/data
 
 CMD ["python", "whatsapp_sender.py"]

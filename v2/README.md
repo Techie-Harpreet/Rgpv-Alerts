@@ -10,7 +10,7 @@ Posts new RGPV exam timetables and notices to a WhatsApp channel (via WAHA) or a
 | `helper.py` | Runs the scraper, updates `rgpv_timetables.json`, builds direct PDF links |
 | `whatsapp_sender.py` | Checks every `CHECK_INTERVAL` seconds and sends new timetables and notices to your WhatsApp channels via WAHA |
 | `telegram_bot.py` | Same, but posts to a Telegram group |
-| `sent_timetables.json` / `sent_notices.json` | IDs already posted (kept in `DATA_DIR`) |
+| `sent_timetables.json` / `sent_notices.json` | IDs already posted. Stored in Cloudflare R2 when `R2_*` is set, else in `DATA_DIR`. The copy in the repo seeds empty storage |
 
 ## Setup
 ```bash
@@ -42,3 +42,9 @@ A `422` from WAHA usually means the session is not `WORKING` (re-scan the QR or 
 - `/start`, `/status` — check the bot is running
 - `/check` — scrape and post new timetables now (admin)
 - `/reset` — clear the sent list; everything is re-posted on the next check (admin)
+
+## Storage
+Set `R2_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY` and `R2_BUCKET_NAME` to keep the JSON state in a
+Cloudflare R2 bucket (under `R2_PREFIX`, default `rgpv-alerts/`); no Docker volume is needed then.
+Without them the files live in `DATA_DIR` (mount a volume there in Docker).
+If stored state can't be read, the check is skipped instead of re-sending everything.
