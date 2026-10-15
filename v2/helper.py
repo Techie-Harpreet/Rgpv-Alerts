@@ -19,6 +19,7 @@ DATA_DIR = os.getenv("DATA_DIR") or BASE_DIR
 os.makedirs(DATA_DIR, exist_ok=True)
 TIMETABLES_FILE = os.path.join(DATA_DIR, "rgpv_timetables.json")
 SENT_TIMETABLES_FILE = os.path.join(DATA_DIR, "sent_timetables.json")
+SENT_NOTICES_FILE = os.path.join(DATA_DIR, "sent_notices.json")
 
 # Seed an empty volume with the bundled sent list so old timetables aren't re-sent
 _bundled_sent = os.path.join(BASE_DIR, "sent_timetables.json")
